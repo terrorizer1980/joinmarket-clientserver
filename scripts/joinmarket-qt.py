@@ -77,11 +77,11 @@ from jmclient import load_program_config, get_network, update_persist_config,\
     get_tumble_log, restart_wait, tumbler_filter_orders_callback,\
     wallet_generate_recover_bip39, wallet_display, get_utxos_enabled_disabled,\
     NO_ROUNDING, get_max_cj_fee_values, get_default_max_absolute_fee, \
-    get_default_max_relative_fee, RetryableStorageError, add_base_options
+    get_default_max_relative_fee, RetryableStorageError, add_base_options, ygstart
 from qtsupport import ScheduleWizard, TumbleRestartWizard, config_tips,\
     config_types, QtHandler, XStream, Buttons, OkButton, CancelButton,\
     PasswordDialog, MyTreeWidget, JMQtMessageBox, BLUE_FG,\
-    donation_more_message
+    donation_more_message, StatusBarButton, read_QIcon, MakerDialog
 
 from twisted.internet import task
 
@@ -1295,6 +1295,11 @@ class JMMainWindow(QMainWindow):
         # was already shown
         self.syncmsg = ""
 
+        # makerDialog keeps track of state related
+        # to running in Maker mode:
+        self.makerDialog = None
+        self.maker_running = False
+
         self.reactor = reactor
         self.initUI()
 
@@ -1309,42 +1314,93 @@ class JMMainWindow(QMainWindow):
         else:
             event.ignore()
 
+    def makerManager(self):
+        action_fn = self.stopMaker if self.maker_running else self.startMaker
+        self.makerDialog = MakerDialog(action_fn, self.maker_running)
+
+    def toggle_non_maker_function(self):
+        """ While maker is running we prevent actions
+        to do coinjoins as taker or to load or alter the wallet
+        or change settings.
+        TODO These restrictions can be relaxed after analysis.
+        """
+        for action in [self.loadAction, self.generateAction,
+                       self.recoverAction]:
+            action.setEnabled(not self.maker_running)
+        for tab in [self.centralWidget().widget(x) for x in [1,2]]:
+            tab.setEnabled(not self.maker_running)
+
+    def startMaker(self):
+        if not self.wallet_service:
+            return (False, "Wallet is not loaded and synced, cannot start maker.")
+        mle = self.makerDialog.maker_settings_le
+        offertype = 'swreloffer' if mle[0][1].currentText() == "Relative fee" else 'swabsoffer'
+        cjabsfee = int(mle[1][1].text())
+        cjrelfee = float(mle[2][1].text())
+        txfee = int(mle[3][1].text())
+        minsize = int(mle[4][1].text())
+        self.makerfactory = ygstart(self.wallet_service, [txfee, cjabsfee, cjrelfee,
+                                        offertype, minsize], rs=False)
+        self.maker_running = True
+        self.setMakerBtn()
+        self.toggle_non_maker_function()
+        self.makerDialog.close()
+
+
+    def setMakerBtn(self):
+        if self.maker_running:
+            self.makerbtn.setIcon(read_QIcon("greencircle.png"))
+            self.makerbtn.setToolTip("Maker running: click to manage")
+        else:
+            self.makerbtn.setIcon(read_QIcon("reddiamond.png"))
+            self.makerbtn.setToolTip("Click to start maker.")
+
+    def stopMaker(self):
+        self.makerfactory.proto_client.request_mc_shutdown()
+        self.maker_running = False
+        self.setMakerBtn()
+        self.toggle_non_maker_function()
+        self.makerDialog.close()
+
     def initUI(self):
         self.statusBar().showMessage("Ready")
+        self.makerbtn = StatusBarButton(read_QIcon("reddiamond.png"),
+                                "Click to start maker", self.makerManager)
+        self.statusBar().addPermanentWidget(self.makerbtn)
         self.setGeometry(300, 300, 250, 150)
-        loadAction = QAction('&Load', self)
-        loadAction.setStatusTip('Load wallet from file')
-        loadAction.triggered.connect(self.selectWallet)
-        generateAction = QAction('&Generate', self)
-        generateAction.setStatusTip('Generate new wallet')
-        generateAction.triggered.connect(self.generateWallet)
-        recoverAction = QAction('&Recover', self)
-        recoverAction.setStatusTip('Recover wallet from seed phrase')
-        recoverAction.triggered.connect(self.recoverWallet)
-        showSeedAction = QAction('&Show seed', self)
-        showSeedAction.setStatusTip('Show wallet seed phrase')
-        showSeedAction.triggered.connect(self.showSeedDialog)
-        exportPrivAction = QAction('&Export keys', self)
-        exportPrivAction.setStatusTip('Export all private keys to a  file')
-        exportPrivAction.triggered.connect(self.exportPrivkeysJson)
-        quitAction = QAction(QIcon('exit.png'), '&Quit', self)
-        quitAction.setShortcut('Ctrl+Q')
-        quitAction.setStatusTip('Quit application')
-        quitAction.triggered.connect(qApp.quit)
+        self.loadAction = QAction('&Load', self)
+        self.loadAction.setStatusTip('Load wallet from file')
+        self.loadAction.triggered.connect(self.selectWallet)
+        self.generateAction = QAction('&Generate', self)
+        self.generateAction.setStatusTip('Generate new wallet')
+        self.generateAction.triggered.connect(self.generateWallet)
+        self.recoverAction = QAction('&Recover', self)
+        self.recoverAction.setStatusTip('Recover wallet from seed phrase')
+        self.recoverAction.triggered.connect(self.recoverWallet)
+        self.showSeedAction = QAction('&Show seed', self)
+        self.showSeedAction.setStatusTip('Show wallet seed phrase')
+        self.showSeedAction.triggered.connect(self.showSeedDialog)
+        self.exportPrivAction = QAction('&Export keys', self)
+        self.exportPrivAction.setStatusTip('Export all private keys to a  file')
+        self.exportPrivAction.triggered.connect(self.exportPrivkeysJson)
+        self.quitAction = QAction(QIcon('exit.png'), '&Quit', self)
+        self.quitAction.setShortcut('Ctrl+Q')
+        self.quitAction.setStatusTip('Quit application')
+        self.quitAction.triggered.connect(qApp.quit)
 
-        aboutAction = QAction('About Joinmarket', self)
-        aboutAction.triggered.connect(self.showAboutDialog)
+        self.aboutAction = QAction('About Joinmarket', self)
+        self.aboutAction.triggered.connect(self.showAboutDialog)
 
         menubar = self.menuBar()
         walletMenu = menubar.addMenu('&Wallet')
-        walletMenu.addAction(loadAction)
-        walletMenu.addAction(generateAction)
-        walletMenu.addAction(recoverAction)
-        walletMenu.addAction(showSeedAction)
-        walletMenu.addAction(exportPrivAction)
-        walletMenu.addAction(quitAction)
+        walletMenu.addAction(self.loadAction)
+        walletMenu.addAction(self.generateAction)
+        walletMenu.addAction(self.recoverAction)
+        walletMenu.addAction(self.showSeedAction)
+        walletMenu.addAction(self.exportPrivAction)
+        walletMenu.addAction(self.quitAction)
         aboutMenu = menubar.addMenu('&About')
-        aboutMenu.addAction(aboutAction)
+        aboutMenu.addAction(self.aboutAction)
 
         self.show()
 
