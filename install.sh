@@ -457,7 +457,7 @@ main ()
     if [ "$with_jmvenv" == 1 ]; then
         jm_root="${jm_source}/jmvenv"
     else
-        jm_root="${jm_source}"
+        jm_root=""
     fi
     jm_deps="${jm_source}/deps"
     export PKG_CONFIG_PATH="${jm_root}/lib/pkgconfig:${PKG_CONFIG_PATH}"
